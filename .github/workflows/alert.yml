@@ -1,0 +1,45 @@
+name: US Index Momentum Alert
+on:
+  schedule:
+    - cron: '0 22 * * 3'      # MERCREDI 22h UTC : filtre 15j + heartbeat (toujours envoye)
+    - cron: '0 22 28-31 * *'  # FIN DE MOIS : garde -> envoye seulement le dernier jour de bourse
+  workflow_dispatch:
+jobs:
+  send-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Faut-il envoyer aujourd'hui ?
+        id: guard
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHED: ${{ github.event.schedule }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import datetime, os
+          ev, sched = os.environ.get("EVENT"), os.environ.get("SCHED","").strip()
+          t = datetime.date.today()
+          send = True
+          # Le cron fin de mois tourne les 28-31 : on n'envoie que si AUJOURD'HUI
+          # est le dernier jour de bourse du mois (le prochain jour ouvre est un autre mois).
+          if ev == "schedule" and sched == "0 22 28-31 * *":
+              n = t + datetime.timedelta(days=1)
+              while n.weekday() >= 5:
+                  n += datetime.timedelta(days=1)
+              send = (n.month != t.month)
+          print("send=yes" if send else "send=no")
+          PY
+      - name: Install deps
+        if: steps.guard.outputs.send == 'yes'
+        run: pip install pandas numpy requests
+      - name: Run alert
+        if: steps.guard.outputs.send == 'yes'
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_RECIPIENTS: ${{ secrets.ALERT_RECIPIENTS }}
+          EODHD_KEY: ${{ secrets.EODHD_KEY }}
+        run: python alert_email.py
