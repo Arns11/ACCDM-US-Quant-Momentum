@@ -14,22 +14,19 @@ on:
 jobs:
   send-alert:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+
       - name: Install dependencies
         run: pip install pandas numpy requests yfinance
-      
-      - name: Download latest data
-        run: python3 scripts/download_data.py
-      
+
       - name: Send alert email
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
@@ -39,7 +36,7 @@ jobs:
           EODHD_KEY: ${{ secrets.EODHD_API_KEY }}
         run: |
           if [ "${{ github.event.inputs.force }}" = "true" ]; then
-            python3 scripts/alert_email.py --force
+            python3 alert_email.py --force
           else
-            python3 scripts/alert_email.py
+            python3 alert_email.py
           fi
