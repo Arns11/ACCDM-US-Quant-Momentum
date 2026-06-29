@@ -1,0 +1,45 @@
+name: ACCDM-2 Alert
+
+on:
+  schedule:
+    - cron: '0 22 * * 3'
+    - cron: '0 22 28-31 * 1-5'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Forcer envoi meme si pas jour de signal'
+        required: false
+        default: 'false'
+
+jobs:
+  send-alert:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install pandas numpy requests yfinance
+      
+      - name: Download latest data
+        run: python3 scripts/download_data.py
+      
+      - name: Send alert email
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_RECIPIENTS: ${{ secrets.ALERT_RECIPIENTS }}
+          CAPITAL_REEL_EUR: ${{ secrets.CAPITAL_REEL_EUR }}
+          EODHD_KEY: ${{ secrets.EODHD_API_KEY }}
+        run: |
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            python3 scripts/alert_email.py --force
+          else
+            python3 scripts/alert_email.py
+          fi
