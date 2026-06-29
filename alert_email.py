@@ -321,19 +321,6 @@ def build_html_email(ctx):
         <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;">POUR {cap:,.0f} &euro;</td>
       </tr>{alloc}
     </table>{sub_lev}</td></tr>
-  <tr><td style="padding:18px 28px 4px;">
-    <table role="presentation" width="100%" style="background:#f8fafc;border-left:4px solid {s['color']};border-radius:0 8px 8px 0;">
-      <tr><td style="padding:14px 16px;">
-        <p style="margin:0 0 4px;color:#0f172a;font-size:13px;font-weight:700;">Pourquoi ce signal ?</p>
-        <p style="margin:0;color:#475569;font-size:14px;line-height:1.5;">{ctx['why']}</p>
-      </td></tr></table></td></tr>
-  <tr><td style="padding:18px 28px 8px;">
-    <p style="margin:0 0 8px;color:#94a3b8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Contexte de marche</p>
-    <table role="presentation" width="100%" style="font-size:13px;color:#475569;">
-      <tr><td style="padding:3px 0;">Momentum mensuel SPY vs monetaire</td><td style="padding:3px 0;text-align:right;font-weight:600;color:{'#15803d' if m.get('mom_ok') else '#b91c1c'};">{m.get('mom_txt','-')}</td></tr>
-      <tr><td style="padding:3px 0;">Filtre de protection 15 jours</td><td style="padding:3px 0;text-align:right;font-weight:600;color:{'#b91c1c' if m.get('filter_on') else '#15803d'};">{m.get('filter_txt','-')}</td></tr>
-      <tr><td style="padding:3px 0;">SPY / QQQ (cloture)</td><td style="padding:3px 0;text-align:right;font-weight:600;color:#0f172a;">{m.get('spy','-')} / {m.get('qqq','-')}</td></tr>
-    </table></td></tr>
   <tr><td style="padding:20px 28px 26px;border-top:1px solid #e2e8f0;">
     <p style="margin:0 0 8px;color:#94a3b8;font-size:11px;line-height:1.5;">Signal genere automatiquement le {ctx['date']}. Strategie {STRAT_NAME} ({BRAND}). Les ordres sont a executer a l'ouverture de la prochaine seance.</p>
     <p style="margin:0;color:#cbd5e1;font-size:10px;line-height:1.5;">Information fournie a titre d'aide a la decision &mdash; ne constitue pas un conseil en investissement personnalise. Les performances passees ne prejugent pas des performances futures. Vous restez responsable de vos ordres. &middot; <a href="#" style="color:#94a3b8;">Se desabonner</a></p>
