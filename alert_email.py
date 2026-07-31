@@ -819,12 +819,23 @@ def build_html_email(ctx, maxdd_1="n.d.", maxdd_15="n.d."):
   <tr><td style="padding:18px 28px 4px;">
     <p style="margin:0 0 10px;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Performance de la strategie</p>
     <img src="cid:equity_curve" alt="Courbe de performance" width="544" style="width:100%;max-width:544px;border:1px solid #e2e8f0;border-radius:10px;display:block;">
-    <p style="margin:8px 0 0;color:#94a3b8;font-size:11px;line-height:1.5;"><b>Courbe principale : levier 1</b>, coherente avec l'allocation ci-dessus. La courbe gris clair montre la meme strategie a levier 1,5 (simulation, cout de financement de 2,5 %/an inclus). La partie anterieure au trait rouge est une <b>performance simulee</b> (backtest) ; la partie verte correspond aux signaux emis depuis le demarrage live. Base {cap:,.0f} $ US, frais inclus.</p>
-    <p style="margin:6px 0 0;color:#64748b;font-size:12px;font-weight:600;">Pire baisse historique (drawdown maximum) : {maxdd_1} (levier 1) &middot; {maxdd_15} (levier 1,5)</p>
-    <p style="margin:6px 0 0;color:#94a3b8;font-size:10px;line-height:1.5;">Les performances passees ne prejugent pas des performances futures.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+      <tr style="background:#0f172a;">
+        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;letter-spacing:.5px;">RISQUE HISTORIQUE</td>
+        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;">LEVIER 1</td>
+        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;">LEVIER 1,5</td>
+      </tr>
+      <tr style="background:#ffffff;">
+        <td style="padding:12px 16px;font-size:14px;color:#0f172a;font-weight:700;">Pire baisse depuis un sommet
+          <span style="display:block;font-weight:400;color:#94a3b8;font-size:12px;margin-top:2px;">La plus forte perte temporaire que la strategie a connue avant de remonter (drawdown maximum)</span></td>
+        <td style="padding:12px 16px;text-align:right;font-weight:700;color:#b91c1c;font-size:16px;">{maxdd_1}</td>
+        <td style="padding:12px 16px;text-align:right;font-weight:700;color:#b91c1c;font-size:16px;">{maxdd_15}</td>
+      </tr>
+    </table>
+    <p style="margin:10px 0 0;color:#64748b;font-size:12px;line-height:1.6;"><b>Comment lire le graphique :</b> la courbe principale suit un capital de {cap:,.0f} $ US <b>sans effet de levier</b>, comme le tableau d'allocation ci-dessus. La courbe gris clair montre la meme strategie avec un levier de 1,5, c'est-a-dire en investissant une fois et demie le capital grace a un emprunt (cout de l'emprunt de 2,5 % par an deja deduit). Avant le trait rouge, il s'agit d'une <b>performance simulee</b> : ce que la strategie aurait fait dans le passe. Apres le trait rouge, la courbe suit les signaux reellement envoyes. Tous les frais de transaction sont inclus. Les performances passees ne prejugent pas des performances futures.</p>
   </td></tr>
   <tr><td style="padding:20px 28px 26px;border-top:1px solid #e2e8f0;">
-    <p style="margin:0 0 8px;color:#94a3b8;font-size:11px;line-height:1.5;">Signal genere automatiquement le {ctx['date']}. Strategie {STRAT_NAME} ({BRAND}). Les ordres sont a executer a l'ouverture de la prochaine seance.</p>
+    <p style="margin:0 0 10px;color:#334155;font-size:13px;line-height:1.7;"><b>Quand agir ?</b> Ce signal a ete calcule apres la cloture de la Bourse americaine du {ctx['date']}. Si une action est demandee ci-dessus, passez votre ordre <b>a l'ouverture de la prochaine seance de Wall Street</b> (15h30 heure de Paris), en choisissant un ordre "au marche". Si l'email indique qu'il n'y a rien a faire, vous n'avez aucun ordre a passer.</p>
     <p style="margin:0;color:#cbd5e1;font-size:10px;line-height:1.5;">Information fournie a titre d'aide a la decision &mdash; ne constitue pas un conseil en investissement personnalise. Les performances passees ne prejugent pas des performances futures. Vous restez responsable de vos ordres. &middot; <a href="#" style="color:#94a3b8;">Se desabonner</a></p>
   </td></tr>
 </table></td></tr></table></body></html>"""
