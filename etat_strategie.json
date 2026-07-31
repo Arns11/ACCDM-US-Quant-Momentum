@@ -4,16 +4,20 @@
   "devise": "USD",
   "capital_de_reference": 10000,
   "levier": 1,
-  "calcule_le": "2026-07-31 12:03:11",
-  "seance_de_reference": "2026-07-30",
+  "calcule_le": "2026-07-31 18:47:22",
+  "seance_de_reference": "2026-07-31",
   "source_donnees": "EODHD",
-  "jour_de_signal": false,
+  "jour_de_signal": true,
   "action": {
-    "action_requise": false,
-    "type": "AUCUNE",
-    "consigne": "Aucune action a realiser aujourd'hui. Ce n'est pas un jour de signal.",
-    "allocation_cible": null,
-    "motif_du_jour": "jour ordinaire"
+    "action_requise": true,
+    "type": "OUVRIR",
+    "consigne": "Investir : 50% SPY et 50% QQQ",
+    "allocation_cible": {
+      "SPY_pct": 50,
+      "QQQ_pct": 50,
+      "liquidites_pct": 0
+    },
+    "motif_du_jour": "rebalancement mensuel"
   },
   "position": {
     "investi": false,
@@ -27,8 +31,8 @@
   },
   "calendrier": {
     "prochain_point_hebdomadaire": "2026-08-05",
-    "prochain_rebalancement_mensuel": "2026-07-31",
-    "prochaine_date_de_signal": "2026-07-31"
+    "prochain_rebalancement_mensuel": "2026-08-31",
+    "prochaine_date_de_signal": "2026-08-05"
   },
   "avertissement": "Information fournie a titre d'aide a la decision. Ne constitue pas un conseil en investissement personnalise."
 }

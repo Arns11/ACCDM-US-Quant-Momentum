@@ -4,3 +4,4 @@ horodatage_envoi,date_signal,motif_signal,action,spy_pct,qqq_pct,cash_pct,prix_s
 2026-07-31 11:47:40,2026-07-30,"jour ordinaire, aucun signal prevu",MAINTENIR,0,0,100,741.69,683.55,EODHD,1,ENVOYE_TEST
 2026-07-31 11:59:08,2026-07-30,"jour ordinaire, aucun signal prevu",MAINTENIR,0,0,100,741.69,683.55,EODHD,1,ENVOYE_TEST
 2026-07-31 12:03:14,2026-07-30,"jour ordinaire, aucun signal prevu",MAINTENIR,0,0,100,741.69,683.55,EODHD,1,ENVOYE_TEST
+2026-07-31 18:47:26,2026-07-31,rebalancement mensuel,OUVRIR,50,50,0,747.03,687.99,EODHD,1,ENVOYE
