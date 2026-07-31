@@ -822,16 +822,16 @@ def build_html_email(ctx, maxdd_1="n.d.", maxdd_15="n.d."):
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
       <tr style="background:#0f172a;">
         <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;letter-spacing:.5px;">RISQUE HISTORIQUE</td>
-        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;">LEVIER 1</td>
-        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;">LEVIER 1,5</td>
+        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;white-space:nowrap;">LEVIER 1</td>
+        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;white-space:nowrap;">LEVIER 1,5</td>
       </tr>
       <tr style="background:#ffffff;">
-        <td style="padding:12px 16px;font-size:14px;color:#0f172a;font-weight:700;">Pire baisse depuis un sommet
-          <span style="display:block;font-weight:400;color:#94a3b8;font-size:12px;margin-top:2px;">La plus forte perte temporaire que la strategie a connue avant de remonter (drawdown maximum)</span></td>
-        <td style="padding:12px 16px;text-align:right;font-weight:700;color:#b91c1c;font-size:16px;">{maxdd_1}</td>
-        <td style="padding:12px 16px;text-align:right;font-weight:700;color:#b91c1c;font-size:16px;">{maxdd_15}</td>
+        <td style="padding:12px 16px;font-size:13px;color:#0f172a;font-weight:700;">Pire baisse depuis un sommet</td>
+        <td style="padding:12px 16px;text-align:right;font-weight:700;color:#0f172a;font-size:13px;white-space:nowrap;">{maxdd_1}</td>
+        <td style="padding:12px 16px;text-align:right;font-weight:700;color:#0f172a;font-size:13px;white-space:nowrap;">{maxdd_15}</td>
       </tr>
     </table>
+    <p style="margin:6px 0 0;color:#94a3b8;font-size:11px;line-height:1.5;">La pire baisse (drawdown maximum) est la plus forte perte temporaire que la strategie a connue avant de retrouver son niveau precedent.</p>
     <p style="margin:10px 0 0;color:#64748b;font-size:12px;line-height:1.6;"><b>Comment lire le graphique :</b> la courbe principale suit un capital de {cap:,.0f} $ US <b>sans effet de levier</b>, comme le tableau d'allocation ci-dessus. La courbe gris clair montre la meme strategie avec un levier de 1,5, c'est-a-dire en investissant une fois et demie le capital grace a un emprunt (cout de l'emprunt de 2,5 % par an deja deduit). Avant le trait rouge, il s'agit d'une <b>performance simulee</b> : ce que la strategie aurait fait dans le passe. Apres le trait rouge, la courbe suit les signaux reellement envoyes. Tous les frais de transaction sont inclus. Les performances passees ne prejugent pas des performances futures.</p>
   </td></tr>
   <tr><td style="padding:20px 28px 26px;border-top:1px solid #e2e8f0;">
