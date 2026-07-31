@@ -921,8 +921,11 @@ def main():
         print(f"  ACTION = {ctx['action']} | {ctx['directive']}")
         html = build_html_email(ctx)
         send_email(subject_for(ctx), html, sender, app_password, recipients)
-        append_log(ctx, motif, source, recipients, "ENVOYE")
-        print("Termine.")
+        # Un envoi declenche a la main un jour ordinaire est marque comme test,
+        # pour ne pas polluer la verification des signaux reellement diffuses.
+        statut = "ENVOYE" if signal_day else "ENVOYE_TEST"
+        append_log(ctx, motif, source, recipients, statut)
+        print(f"Termine ({statut}).")
     except Exception as e:
         msg = f"{type(e).__name__} : {e}\n\n{traceback.format_exc()}"
         print(f"ERREUR : {msg}")
