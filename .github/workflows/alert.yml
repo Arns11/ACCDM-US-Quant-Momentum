@@ -1,42 +1,83 @@
-name: ACCDM-2 Alert
+name: US Index Momentum
+
+# Le programme tourne CHAQUE JOUR OUVRE a 22h UTC (environ 2h apres la
+# cloture americaine). Il met a jour l'etat de la strategie, lu par la
+# page du site.
+#
+# L'email, lui, n'est envoye que les jours de signal : mercredi de filtre
+# et dernier jour ouvre du mois. Cette decision est prise par le programme
+# lui-meme, pas par la planification.
 
 on:
   schedule:
-    - cron: '0 22 * * 3'
-    - cron: '0 22 28-31 * 1-5'
+    - cron: '0 22 * * 1-5'
   workflow_dispatch:
     inputs:
       force:
-        description: 'Forcer envoi meme si pas jour de signal'
+        description: "Forcer l'envoi meme si ce n'est pas un jour de signal"
+        required: false
+        default: 'false'
+      dry_run:
+        description: 'Mode test : calculer sans rien ecrire ni envoyer'
         required: false
         default: 'false'
 
+permissions:
+  contents: write
+
+concurrency:
+  group: us-index-momentum
+  cancel-in-progress: false
+
 jobs:
-  send-alert:
+  signal:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Recuperation du depot
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Installation de Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Installation des bibliotheques
         run: pip install pandas numpy requests yfinance
 
-      - name: Send alert email
+      - name: Calcul de l'etat et envoi eventuel du signal
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_RECIPIENTS: ${{ secrets.ALERT_RECIPIENTS }}
-          CAPITAL_REEL_EUR: ${{ secrets.CAPITAL_REEL_EUR }}
-          EODHD_KEY: ${{ secrets.EODHD_API_KEY }}
+          ALERT_RECIPIENTS_TECH: ${{ secrets.ALERT_RECIPIENTS_TECH }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
         run: |
+          ARGS=""
           if [ "${{ github.event.inputs.force }}" = "true" ]; then
-            python3 alert_email.py --force
+            ARGS="$ARGS --force"
+          fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          python3 alert_email.py $ARGS
+
+      - name: Conservation de l'etat et du journal
+        if: always()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          CHANGES=0
+          for f in etat_strategie.json signals_log.csv; do
+            if [ -f "$f" ]; then
+              git add "$f"
+              CHANGES=1
+            fi
+          done
+          if [ "$CHANGES" = "1" ] && ! git diff --cached --quiet; then
+            git commit -m "Etat strategie — $(date -u +%Y-%m-%d)"
+            git pull --rebase --autostash || true
+            git push
           else
-            python3 alert_email.py
+            echo "Rien de nouveau a enregistrer."
           fi
