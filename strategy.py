@@ -74,7 +74,7 @@ COST_BPS = 3 / 10_000
 INITIAL_CAPITAL = 10_000_000
 
 # Dates cle
-LIVE_START_DATE = pd.Timestamp("2026-05-04")
+LIVE_START_DATE = pd.Timestamp("2021-05-04")
 
 
 # ============================================================
