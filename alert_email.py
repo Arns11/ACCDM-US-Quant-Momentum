@@ -1,88 +1,165 @@
 """
-alert_email.py — Alerte email US Index Momentum (Quant Signals).
+alert_email.py — Alerte email US Index Momentum (Quant Signals)
+================================================================
+VERSION 2.0 — 31 juillet 2026
 
-- Fetch SPY/QQQ/BIL + IRX en direct depuis EODHD (autonome, rien a synchroniser).
-- Rejoue la strategie (mode C : signal close J, ordre a l'ouverture J+1) pour
-  determiner l'ACTION du jour : OUVRIR / FERMER / MAINTENIR. Calcul a partir des
-  donnees a chaque run -> aucun fichier d'etat a gerer.
-- Construit un email HTML soigne (allocation a levier 1, note pour appliquer son
-  propre levier) et l'envoie via Gmail.
+Corrections apportees par rapport a la version precedente :
 
-Cadence (pilotee par le workflow GitHub) : chaque mercredi + dernier ouvre du mois.
-Email envoye meme quand il n'y a rien a faire (MAINTENIR).
+  1. GARDE JOUR DE SIGNAL
+     Le programme verifie lui-meme qu'on est bien un jour de signal
+     (mercredi de filtre, ou dernier jour ouvre du mois). Sinon il ne
+     fait rien. Fini les 4 emails d'affilee en fin de mois.
 
-Dependances : pandas, numpy, requests + strategy.py (meme repo).
-Variables d'environnement : GMAIL_USER, GMAIL_APP_PASS, ALERT_RECIPIENTS.
+  2. CONTROLE DE FRAICHEUR
+     Le programme verifie que la derniere donnee recue correspond bien
+     a la seance du jour. Si les donnees ont du retard, il refuse
+     d'envoyer et previent par email technique.
+
+  3. SOURCE DE SECOURS
+     EODHD en premier. Si indisponible, bascule automatique sur Yahoo
+     Finance. Si les deux echouent, email technique d'alerte.
+
+  4. CLE API
+     Plus aucune cle ecrite dans le code. Lecture par variable
+     d'environnement uniquement.
+
+  5. JOURNAL DES SIGNAUX
+     Chaque email envoye laisse une ligne dans signals_log.csv.
+     Permet de verifier a posteriori ce qui a reellement ete diffuse.
+
+  6. REENVOI SMTP
+     3 tentatives espacees de 30, 60 et 120 secondes.
+
+Variables d'environnement attendues :
+    GMAIL_USER, GMAIL_APP_PASS, ALERT_RECIPIENTS, EODHD_API_KEY
+Facultatif :
+    ALERT_RECIPIENTS_TECH   (destinataire des alertes techniques,
+                             defaut = GMAIL_USER)
 """
+
+from __future__ import annotations
+
 import os
 import sys
+import csv
+import json
+import time
 import smtplib
+import argparse
 import traceback
-from datetime import datetime
+from pathlib import Path
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 import numpy as np
 import pandas as pd
 import requests
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
 
-# Rend l'import de strategy.py robuste : racine du repo, src/, ou meme dossier
-_here = os.path.dirname(os.path.abspath(__file__))
-for _p in (_here, os.path.join(_here, "src"), os.path.join(_here, ".."), os.path.join(_here, "..", "src")):
+# --- Import de la strategie (racine, src/, ou dossier courant) -------------
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, os.path.join(_HERE, "src"), os.path.join(_HERE, ".."),
+           os.path.join(_HERE, "..", "src")):
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
 
 try:
     from src.strategy import (
-        ASSETS_HELD, COST_BPS, CASH_YIELD_DAILY, COST_FINANCING_ANNUAL,
+        ASSETS_HELD, COST_BPS, CASH_YIELD_DAILY,
         compute_monthly_score, compute_target_allocation,
         get_filter_days, evaluate_filter, get_current_signal,
     )
 except ImportError:
     from strategy import (
-        ASSETS_HELD, COST_BPS, CASH_YIELD_DAILY, COST_FINANCING_ANNUAL,
+        ASSETS_HELD, COST_BPS, CASH_YIELD_DAILY,
         compute_monthly_score, compute_target_allocation,
         get_filter_days, evaluate_filter, get_current_signal,
     )
 
-EODHD_KEY = os.environ.get("EODHD_KEY", "69fdc152a61830.85937256")
+
+# ==========================================================================
+# CONFIGURATION
+# ==========================================================================
+
 SMTP_SERVER, SMTP_PORT = "smtp.gmail.com", 587
-CAPITAL_EXEMPLE = 10000
+CAPITAL_EXEMPLE = 10_000
 BRAND = "Quant Signals"
 STRAT_NAME = "US Index Momentum"
 
+ROOT = Path(_HERE).resolve()
+if ROOT.name in ("scripts", "src"):
+    ROOT = ROOT.parent
+SIGNALS_LOG = ROOT / "signals_log.csv"
+ETAT_JSON = ROOT / "etat_strategie.json"
 
-# ====================== DONNEES (EODHD direct) ======================
-def _eodhd(symbol, frm="1999-01-01"):
+# Capital de reference affiche sur la page publique. Tout est en dollars :
+# la strategie achete des actifs cotes en dollars, on n'introduit aucune
+# conversion de devise qui melangerait performance et taux de change.
+CAPITAL_REFERENCE_USD = 10_000
+DEVISE = "USD"
+
+SMTP_RETRY_DELAYS = [30, 60, 120]
+NY = ZoneInfo("America/New_York")
+US_BDAY = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+
+# Heure de cloture des marches US, en heure de New York.
+# On ajoute une marge de securite avant de considerer la seance close.
+US_CLOSE_HOUR = 16
+US_CLOSE_MARGIN_MIN = 20
+
+
+def get_api_key() -> str:
+    """Cle EODHD lue uniquement dans l'environnement. Aucune valeur en dur."""
+    key = os.environ.get("EODHD_API_KEY") or os.environ.get("EODHD_KEY")
+    if not key:
+        raise RuntimeError(
+            "Cle EODHD absente. Definir la variable d'environnement "
+            "EODHD_API_KEY (secret GitHub ou fichier .env local)."
+        )
+    return key
+
+
+# ==========================================================================
+# TELECHARGEMENT DES DONNEES — EODHD puis Yahoo en secours
+# ==========================================================================
+
+def _eodhd_series(symbol: str, api_key: str, frm: str = "1999-01-01") -> pd.DataFrame:
     url = f"https://eodhd.com/api/eod/{symbol}"
-    r = requests.get(url, params={"api_token": EODHD_KEY, "fmt": "json",
-                                  "from": frm, "period": "d"}, timeout=60)
+    r = requests.get(
+        url,
+        params={"api_token": api_key, "fmt": "json", "from": frm, "period": "d"},
+        timeout=60,
+    )
     r.raise_for_status()
     df = pd.DataFrame(r.json())
     if df.empty:
-        raise RuntimeError(f"EODHD: aucune donnee pour {symbol}")
+        raise RuntimeError(f"EODHD : aucune donnee pour {symbol}")
     df["date"] = pd.to_datetime(df["date"])
     return df.set_index("date").sort_index()
 
 
-def build_frames():
-    """close (TR : SPY/QQQ adjusted, BIL etendu via IRX) + open ajuste."""
-    spy, qqq = _eodhd("SPY.US"), _eodhd("QQQ.US")
-    bil, irx = _eodhd("BIL.US"), _eodhd("IRX.INDX")
+def _assemble(spy_close, spy_open, qqq_close, qqq_open, bil_close, irx_close):
+    """Assemble les series en deux tableaux : cloture et ouverture ajustees.
 
-    close = pd.DataFrame({"SPY": spy["adjusted_close"], "QQQ": qqq["adjusted_close"]})
-    open_adj = pd.DataFrame({
-        "SPY": spy["open"] * (spy["adjusted_close"] / spy["close"]),
-        "QQQ": qqq["open"] * (qqq["adjusted_close"] / qqq["close"]),
-    })
-    # BIL : reel + extension IRX pre-2007
-    bil_real = bil["adjusted_close"].copy()
+    BIL n'existe qu'a partir de 2007. Avant cette date, on reconstitue une
+    serie equivalente a partir du taux monetaire IRX.
+    """
+    close = pd.DataFrame({"SPY": spy_close, "QQQ": qqq_close})
+    open_adj = pd.DataFrame({"SPY": spy_open, "QQQ": qqq_open})
+
+    bil_real = bil_close.dropna().copy()
     splice = bil_real.index.min()
-    irx_pre = irx.loc[irx.index < splice, "close"]
-    daily_ret = (1 + irx_pre / 100.0) ** (1 / 252) - 1
-    synth = (1 + daily_ret).cumprod()
-    synth = synth * (bil_real.iloc[0] / synth.iloc[-1])
-    bil_full = pd.concat([synth, bil_real]).sort_index()
+    irx_pre = irx_close.loc[irx_close.index < splice].dropna()
+    if len(irx_pre) > 0:
+        daily_ret = (1 + irx_pre / 100.0) ** (1 / 252) - 1
+        synth = (1 + daily_ret).cumprod()
+        synth = synth * (bil_real.iloc[0] / synth.iloc[-1])
+        bil_full = pd.concat([synth, bil_real]).sort_index()
+    else:
+        bil_full = bil_real
     bil_full = bil_full[~bil_full.index.duplicated(keep="last")]
     close["BIL"] = bil_full.reindex(close.index).ffill()
 
@@ -91,21 +168,170 @@ def build_frames():
     return close, open_adj
 
 
-# ====================== MOTEUR (mode C, levier 1) ======================
+def fetch_from_eodhd():
+    api_key = get_api_key()
+    spy = _eodhd_series("SPY.US", api_key)
+    qqq = _eodhd_series("QQQ.US", api_key)
+    bil = _eodhd_series("BIL.US", api_key)
+    irx = _eodhd_series("IRX.INDX", api_key)
+
+    return _assemble(
+        spy_close=spy["adjusted_close"],
+        spy_open=spy["open"] * (spy["adjusted_close"] / spy["close"]),
+        qqq_close=qqq["adjusted_close"],
+        qqq_open=qqq["open"] * (qqq["adjusted_close"] / qqq["close"]),
+        bil_close=bil["adjusted_close"],
+        irx_close=irx["close"],
+    )
+
+
+def fetch_from_yahoo():
+    import yfinance as yf
+
+    def dl(ticker):
+        df = yf.download(ticker, start="1999-01-01", progress=False,
+                         auto_adjust=True, threads=False)
+        if df is None or df.empty:
+            raise RuntimeError(f"Yahoo : aucune donnee pour {ticker}")
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+        return df
+
+    spy, qqq, bil, irx = dl("SPY"), dl("QQQ"), dl("BIL"), dl("^IRX")
+
+    return _assemble(
+        spy_close=spy["Close"], spy_open=spy["Open"],
+        qqq_close=qqq["Close"], qqq_open=qqq["Open"],
+        bil_close=bil["Close"], irx_close=irx["Close"],
+    )
+
+
+def build_frames():
+    """Renvoie (cloture, ouverture, nom de la source utilisee)."""
+    try:
+        close, open_adj = fetch_from_eodhd()
+        return close, open_adj, "EODHD"
+    except Exception as e:
+        print(f"  EODHD indisponible : {type(e).__name__} : {e}")
+        print("  Bascule sur Yahoo Finance ...")
+        close, open_adj = fetch_from_yahoo()
+        return close, open_adj, "Yahoo Finance (secours)"
+
+
+# ==========================================================================
+# CONTROLE DE FRAICHEUR
+# ==========================================================================
+
+def last_expected_session(now_ny: datetime | None = None) -> pd.Timestamp:
+    """Derniere seance US qui devrait etre disponible a cet instant.
+
+    Si la cloture du jour n'a pas encore eu lieu (ou vient tout juste
+    d'avoir lieu), on attend la seance ouvree precedente.
+    """
+    if now_ny is None:
+        now_ny = datetime.now(NY)
+
+    today = pd.Timestamp(now_ny.date())
+    close_time = now_ny.replace(hour=US_CLOSE_HOUR, minute=US_CLOSE_MARGIN_MIN,
+                                second=0, microsecond=0)
+
+    is_bday = len(pd.bdate_range(today, today, freq=US_BDAY)) == 1
+    if is_bday and now_ny >= close_time:
+        return today
+    return (today - US_BDAY).normalize()
+
+
+def is_last_bday_of_month(ts: pd.Timestamp) -> bool:
+    """Vrai si cette date est le dernier jour ouvre de son mois.
+
+    S'appuie sur le calendrier des jours feries americains, et non sur
+    la presence ou non de donnees apres cette date. C'est indispensable :
+    les donnees s'arretent forcement au jour courant, ce qui ferait
+    passer n'importe quel jour pour une fin de mois.
+    """
+    ts = pd.Timestamp(ts).normalize()
+    first = pd.Timestamp(ts.year, ts.month, 1)
+    last = first + pd.offsets.MonthEnd(1)
+    bdays = pd.bdate_range(start=first, end=last, freq=US_BDAY)
+    return len(bdays) > 0 and ts == bdays[-1].normalize()
+
+
+def check_freshness(close: pd.DataFrame) -> tuple[bool, str]:
+    """Verifie que la derniere donnee correspond bien a la seance attendue."""
+    last_data = pd.Timestamp(close.index[-1]).normalize()
+    expected = last_expected_session()
+    if last_data >= expected:
+        return True, f"Donnees a jour ({last_data.date()})"
+    retard = (expected - last_data).days
+    return False, (
+        f"Donnees en retard : derniere seance recue {last_data.date()}, "
+        f"seance attendue {expected.date()} (retard de {retard} jour(s))."
+    )
+
+
+# ==========================================================================
+# GARDE : EST-CE UN JOUR DE SIGNAL ?
+# ==========================================================================
+
+def is_signal_day(close: pd.DataFrame) -> tuple[bool, str]:
+    """Determine si la derniere seance est un jour de signal.
+
+    Deux cas donnent lieu a un envoi :
+      - jour de filtre hebdomadaire (mercredi, ou jeudi si mercredi absent)
+      - dernier jour ouvre du mois (rebalancement mensuel)
+    """
+    last = pd.Timestamp(close.index[-1]).normalize()
+    idx = close.index
+
+    filter_days = get_filter_days(idx)
+    is_filter = last in filter_days
+
+    is_month_end = is_last_bday_of_month(last)
+
+    if is_filter and is_month_end:
+        return True, "filtre hebdomadaire + rebalancement mensuel"
+    if is_filter:
+        return True, "filtre hebdomadaire"
+    if is_month_end:
+        return True, "rebalancement mensuel"
+    return False, "jour ordinaire, aucun signal prevu"
+
+
+# ==========================================================================
+# MOTEUR — rejoue la strategie en mode C (ordre a l'ouverture du lendemain)
+# ==========================================================================
+
 def run_modeC(prices, prices_open, leverage=1.0, initial_capital=10_000_000):
-    """Rejoue la strategie en mode C. Renvoie positions finales, ordres en attente
-    (= action du jour, a executer a la prochaine ouverture), trades, equity."""
     prices_eom = prices.resample("ME").last()
     score = compute_monthly_score(prices_eom)
     alloc_target = compute_target_allocation(score).loc[score.dropna().index]
 
+    last_data = pd.Timestamp(prices.index[-1])
+
     rebal_dates, valid_idx = [], []
     for d in alloc_target.index:
         cands = prices.index[prices.index <= d]
-        if len(cands):
-            mapped = cands[-1]
-            if mapped.month == d.month and (d - mapped).days <= 4:
-                rebal_dates.append(mapped); valid_idx.append(d)
+        if not len(cands):
+            continue
+        mapped = cands[-1]
+        if mapped.month != d.month:
+            continue
+
+        # Mois en cours : on n'accepte le rebalancement QUE si la seance
+        # est reellement le dernier jour ouvre du mois. Sans cette regle,
+        # les donnees s'arretant au jour courant, chaque jour du mois
+        # passerait pour une fin de mois et regenererait un ordre d'achat.
+        is_current_month = (d.year == last_data.year and d.month == last_data.month)
+        if is_current_month:
+            if not is_last_bday_of_month(mapped):
+                continue
+        else:
+            if (d - mapped).days > 4:
+                continue
+
+        rebal_dates.append(mapped)
+        valid_idx.append(d)
     alloc_bt = alloc_target.loc[valid_idx].copy()
     alloc_bt.index = pd.DatetimeIndex(rebal_dates)
     alloc_bt = alloc_bt[~alloc_bt.index.duplicated(keep="last")]
@@ -121,46 +347,57 @@ def run_modeC(prices, prices_open, leverage=1.0, initial_capital=10_000_000):
 
     for date in prices_bt.index:
         p = prices_bt.loc[date]
-        # exec des ordres en attente a l'ouverture
+
         if pending:
             try:
                 po = prices_open.loc[date]
                 for o in pending:
-                    a, q = o["asset"], o["qty"]; px = float(po[a]); val = q * px; c = val * COST_BPS
+                    a, q = o["asset"], o["qty"]
+                    px = float(po[a])
+                    val = q * px
+                    c = val * COST_BPS
                     if o["side"] == "BUY":
-                        cash -= val + c; positions[a] += q
+                        cash -= val + c
+                        positions[a] += q
                     else:
-                        cash += val - c; positions[a] -= q
+                        cash += val - c
+                        positions[a] -= q
                     trades.append({"date": date, "asset": a, "side": o["side"],
                                    "qty": q, "price": px, "reason": o["reason"]})
                 pending = []
             except KeyError:
                 pass
+
         if cash > 0:
             cash *= 1 + CASH_YIELD_DAILY
 
-        # rebalancement mensuel
         if date in rebal_set:
             target = alloc_bt.loc[date].to_dict()
-            changed = (prev_target is None) or any(abs(target[k] - prev_target.get(k, 0)) > 1e-9 for k in target)
-            empty = sum(positions.values()) < 1e-6 and any(target.get(a, 0) > 0 for a in ASSETS_HELD)
+            changed = (prev_target is None) or any(
+                abs(target[k] - prev_target.get(k, 0)) > 1e-9 for k in target)
+            empty = (sum(positions.values()) < 1e-6
+                     and any(target.get(a, 0) > 0 for a in ASSETS_HELD))
             if changed or empty:
                 eq = cash + sum(positions[a] * p[a] for a in ASSETS_HELD)
-                tq = {a: int(eq * target.get(a, 0) * leverage / p[a]) if target.get(a, 0) > 0 else 0 for a in ASSETS_HELD}
+                tq = {a: int(eq * target.get(a, 0) * leverage / p[a])
+                      if target.get(a, 0) > 0 else 0 for a in ASSETS_HELD}
                 for a in ASSETS_HELD:
                     dq = tq[a] - positions[a]
                     if dq < 0:
-                        pending.append({"asset": a, "side": "SELL", "qty": abs(dq), "reason": "ARBITRAGE"})
+                        pending.append({"asset": a, "side": "SELL",
+                                        "qty": abs(dq), "reason": "ARBITRAGE"})
                     elif dq > 0:
-                        pending.append({"asset": a, "side": "BUY", "qty": dq, "reason": "ARBITRAGE"})
-                prev_target = target.copy(); forced_cash = False
+                        pending.append({"asset": a, "side": "BUY",
+                                        "qty": dq, "reason": "ARBITRAGE"})
+                prev_target = target.copy()
+                forced_cash = False
 
-        # filtre 15j (mercredi)
         if date in filter_days and not forced_cash:
             if evaluate_filter(prices_bt, date, positions):
                 for a in ASSETS_HELD:
                     if positions[a] > 0:
-                        pending.append({"asset": a, "side": "SELL", "qty": positions[a], "reason": "FORCE_EXIT"})
+                        pending.append({"asset": a, "side": "SELL",
+                                        "qty": positions[a], "reason": "FORCE_EXIT"})
                 forced_cash = True
 
     last_trade = trades[-1] if trades else None
@@ -168,7 +405,10 @@ def run_modeC(prices, prices_open, leverage=1.0, initial_capital=10_000_000):
             "last_trade": last_trade, "last_date": prices_bt.index[-1]}
 
 
-# ====================== ETAT -> CONTEXTE EMAIL ======================
+# ==========================================================================
+# ETAT -> CONTEXTE DE L'EMAIL
+# ==========================================================================
+
 def compute_state(prices, prices_open):
     eng = run_modeC(prices, prices_open, leverage=1.0)
     sig = get_current_signal(prices)
@@ -190,7 +430,6 @@ def compute_state(prices, prices_open):
         verb = "entree" if last_trade["side"] == "BUY" else "sortie"
         last_action = f"{verb} le {pd.Timestamp(last_trade['date']).strftime('%d/%m/%Y')}"
 
-    # classification action
     if buys:
         action = "OUVRIR"
         directive = "Investir : 50% SPY et 50% QQQ"
@@ -227,7 +466,6 @@ def compute_state(prices, prices_open):
                 why = ("Le momentum mensuel est defavorable (S&P 500 sous le monetaire). La "
                        "strategie reste en liquidites en attendant un signal favorable.")
 
-    # date de declenchement du filtre (= date de la sortie FORCE_EXIT)
     filter_date = None
     if filt:
         if any(o["reason"] == "FORCE_EXIT" for o in pending):
@@ -246,17 +484,180 @@ def compute_state(prices, prices_open):
         action=action, directive=directive, date=date_str,
         spy_pct=spy_pct, qqq_pct=qqq_pct, cash_pct=cash_pct, leverage=1,
         capital_exemple=CAPITAL_EXEMPLE, why=why, last_action=last_action,
+        signal_date=eng["last_date"],
+        spy_close=float(spy_c), qqq_close=float(qqq_c),
+        _eng=eng,
         ctx_market=dict(
             mom_ok=(monthly == "RISKY"),
-            mom_txt=("Favorable" if monthly == "RISKY" else "Defavorable") + (" (neutralise par le filtre)" if (monthly == "RISKY" and filt) else ""),
+            mom_txt=("Favorable" if monthly == "RISKY" else "Defavorable")
+                    + (" (neutralise par le filtre)" if (monthly == "RISKY" and filt) else ""),
             filter_on=filt,
             filter_txt=filter_txt,
-            spy=f"{spy_c:,.2f}".replace(",", " "), qqq=f"{qqq_c:,.2f}".replace(",", " "),
+            spy=f"{spy_c:,.2f}".replace(",", " "),
+            qqq=f"{qqq_c:,.2f}".replace(",", " "),
         ),
     )
 
 
-# ====================== EMAIL HTML (design) ======================
+# ==========================================================================
+# ETAT PUBLIC — fichier destine a la page du site
+# ==========================================================================
+
+def _derniere_operation(trades, side):
+    """Renvoie les lignes du dernier mouvement d'achat ou de vente."""
+    concernes = [t for t in trades if t["side"] == side]
+    if not concernes:
+        return []
+    derniere_date = concernes[-1]["date"]
+    return [t for t in concernes if t["date"] == derniere_date]
+
+
+def compute_position_details(eng, prices, capital=CAPITAL_REFERENCE_USD):
+    """Detaille la position courante ramenee au capital de reference.
+
+    Sans effet de levier. Les quantites sont entieres, comme dans la
+    realite : le reliquat non investi reste en liquidites.
+    """
+    investi = sum(eng["positions"].values()) > 1e-6
+    cours = {a: float(prices[a].iloc[-1]) for a in ASSETS_HELD}
+
+    if not investi:
+        sorties = _derniere_operation(eng["trades"], "SELL")
+        depuis = str(pd.Timestamp(sorties[0]["date"]).date()) if sorties else None
+        return {
+            "investi": False,
+            "depuis": depuis,
+            "lignes": [],
+            "capital_reference": capital,
+            "valeur_actuelle": round(capital, 2),
+            "liquidites": round(capital, 2),
+            "gain_latent": 0.0,
+            "gain_latent_pct": 0.0,
+        }
+
+    achats = _derniere_operation(eng["trades"], "BUY")
+    prix_entree = {t["asset"]: float(t["price"]) for t in achats}
+    date_entree = str(pd.Timestamp(achats[0]["date"]).date()) if achats else None
+
+    lignes, investi_total = [], 0.0
+    for a in ASSETS_HELD:
+        pe = prix_entree.get(a)
+        if pe is None or pe <= 0:
+            continue
+        montant_cible = capital * 0.5
+        qty = int(montant_cible / pe)
+        cout = qty * pe
+        valeur = qty * cours[a]
+        investi_total += cout
+        lignes.append({
+            "actif": a,
+            "quantite": qty,
+            "prix_entree": round(pe, 4),
+            "cours_actuel": round(cours[a], 4),
+            "ecart_pct": round((cours[a] / pe - 1) * 100, 2),
+            "montant_investi": round(cout, 2),
+            "valeur_actuelle": round(valeur, 2),
+            "gain_latent": round(valeur - cout, 2),
+        })
+
+    liquidites = capital - investi_total
+    valeur_totale = sum(l["valeur_actuelle"] for l in lignes) + liquidites
+    gain = valeur_totale - capital
+
+    return {
+        "investi": True,
+        "depuis": date_entree,
+        "lignes": lignes,
+        "capital_reference": capital,
+        "valeur_actuelle": round(valeur_totale, 2),
+        "liquidites": round(liquidites, 2),
+        "gain_latent": round(gain, 2),
+        "gain_latent_pct": round(gain / capital * 100, 2),
+    }
+
+
+def prochaines_dates_signal(depuis: pd.Timestamp, horizon_jours: int = 45) -> dict:
+    """Prochain rendez-vous hebdomadaire et prochaine fin de mois."""
+    depuis = pd.Timestamp(depuis).normalize()
+    prochain_filtre = None
+    prochaine_fin_mois = None
+
+    jour = depuis + timedelta(days=1)
+    fin = depuis + timedelta(days=horizon_jours)
+    while jour <= fin:
+        ouvre = len(pd.bdate_range(jour, jour, freq=US_BDAY)) == 1
+        if ouvre:
+            if prochain_filtre is None and jour.weekday() == 2:
+                prochain_filtre = jour
+            if prochaine_fin_mois is None and is_last_bday_of_month(jour):
+                prochaine_fin_mois = jour
+        jour += timedelta(days=1)
+
+    candidats = [d for d in (prochain_filtre, prochaine_fin_mois) if d is not None]
+    return {
+        "prochain_point_hebdomadaire": str(prochain_filtre.date()) if prochain_filtre is not None else None,
+        "prochain_rebalancement_mensuel": str(prochaine_fin_mois.date()) if prochaine_fin_mois is not None else None,
+        "prochaine_date_de_signal": str(min(candidats).date()) if candidats else None,
+    }
+
+
+def ecrire_etat_public(ctx, position, jour_de_signal, motif, source):
+    """Ecrit le fichier lu par la page du site.
+
+    Deux informations strictement separees :
+      - l'etat de la position, valable en permanence
+      - l'action a realiser, presente uniquement les jours de signal
+    """
+    date_signal = pd.Timestamp(ctx["signal_date"])
+
+    if jour_de_signal:
+        action = {
+            "action_requise": ctx["action"] != "MAINTENIR",
+            "type": ctx["action"],
+            "consigne": ctx["directive"],
+            "allocation_cible": {
+                "SPY_pct": ctx["spy_pct"],
+                "QQQ_pct": ctx["qqq_pct"],
+                "liquidites_pct": ctx["cash_pct"],
+            },
+            "motif_du_jour": motif,
+        }
+    else:
+        action = {
+            "action_requise": False,
+            "type": "AUCUNE",
+            "consigne": "Aucune action a realiser aujourd'hui. "
+                        "Ce n'est pas un jour de signal.",
+            "allocation_cible": None,
+            "motif_du_jour": "jour ordinaire",
+        }
+
+    etat = {
+        "strategie": STRAT_NAME,
+        "marque": BRAND,
+        "devise": DEVISE,
+        "capital_de_reference": CAPITAL_REFERENCE_USD,
+        "levier": 1,
+        "calcule_le": datetime.now(NY).strftime("%Y-%m-%d %H:%M:%S"),
+        "seance_de_reference": str(date_signal.date()),
+        "source_donnees": source,
+        "jour_de_signal": bool(jour_de_signal),
+        "action": action,
+        "position": position,
+        "calendrier": prochaines_dates_signal(date_signal),
+        "avertissement": "Information fournie a titre d'aide a la decision. "
+                         "Ne constitue pas un conseil en investissement personnalise.",
+    }
+
+    ETAT_JSON.write_text(json.dumps(etat, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"  Etat public ecrit : {ETAT_JSON}")
+    return etat
+
+
+# ==========================================================================
+# EMAIL HTML
+# ==========================================================================
+
 ACTION_STYLES = {
     "OUVRIR":    {"color": "#15803d", "bg": "#dcfce7", "icon": "&#9650;"},
     "FERMER":    {"color": "#b91c1c", "bg": "#fee2e2", "icon": "&#9660;"},
@@ -286,8 +687,8 @@ def build_html_email(ctx):
     s = ACTION_STYLES[ctx["action"]]
     cap = ctx.get("capital_exemple", 10000)
     spy, qqq, cash = ctx["spy_pct"], ctx["qqq_pct"], ctx["cash_pct"]
-    m = ctx.get("ctx_market", {})
-    last = f"""<p style="margin:4px 0 0;color:#94a3b8;font-size:13px;">Derniere action : {ctx['last_action']}</p>""" if ctx.get("last_action") else ""
+    last = (f"""<p style="margin:4px 0 0;color:#94a3b8;font-size:13px;">Derniere action : {ctx['last_action']}</p>"""
+            if ctx.get("last_action") else "")
     sub_lev = ""
     if cash < 99.9:
         sub_lev = ('<table role="presentation" width="100%" style="margin-top:10px;background:#fffbeb;'
@@ -337,35 +738,200 @@ def subject_for(ctx):
     return f"{STRAT_NAME} - Point hebdo : rien a faire ({ctx['date']})"
 
 
-# ====================== ENVOI ======================
-def send_email(subject, html, sender, app_password, recipients):
-    msg = MIMEMultipart("alternative")
-    msg["From"] = f"{BRAND} <{sender}>"
-    msg["To"] = ", ".join(recipients)
-    msg["Subject"] = subject
-    msg.attach(MIMEText(html, "html", "utf-8"))
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as srv:
-        srv.starttls(); srv.login(sender, app_password)
-        srv.sendmail(sender, recipients, msg.as_string())
-    print(f"Email envoye a : {recipients}")
+# ==========================================================================
+# ENVOI AVEC REESSAIS
+# ==========================================================================
 
+def send_email(subject, html, sender, app_password, recipients):
+    last_err = None
+    for attempt, delay in enumerate([0] + SMTP_RETRY_DELAYS):
+        if delay:
+            print(f"  Nouvelle tentative dans {delay} s ...")
+            time.sleep(delay)
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["From"] = f"{BRAND} <{sender}>"
+            msg["To"] = ", ".join(recipients)
+            msg["Subject"] = subject
+            msg.attach(MIMEText(html, "html", "utf-8"))
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=60) as srv:
+                srv.starttls()
+                srv.login(sender, app_password)
+                srv.sendmail(sender, recipients, msg.as_string())
+            print(f"  Email envoye a : {recipients} (tentative {attempt + 1})")
+            return True
+        except Exception as e:
+            last_err = e
+            print(f"  Echec tentative {attempt + 1} : {type(e).__name__} : {e}")
+    raise RuntimeError(f"Envoi impossible apres {len(SMTP_RETRY_DELAYS) + 1} tentatives : {last_err}")
+
+
+def send_tech_alert(message, sender, app_password):
+    """Alerte technique interne. Jamais envoyee aux abonnes."""
+    dest = os.environ.get("ALERT_RECIPIENTS_TECH", sender)
+    recipients = [r.strip() for r in dest.split(",") if r.strip()]
+    subject = f"[ALERTE TECHNIQUE] {STRAT_NAME} - envoi non effectue"
+    html = (f"<html><body style='font-family:Arial,sans-serif;'>"
+            f"<h2 style='color:#b91c1c;'>Signal non envoye</h2>"
+            f"<p>Strategie : <b>{STRAT_NAME}</b></p>"
+            f"<p>Horodatage : {datetime.now(NY).strftime('%Y-%m-%d %H:%M')} (New York)</p>"
+            f"<pre style='background:#f1f5f9;padding:12px;border-radius:6px;"
+            f"white-space:pre-wrap;'>{message}</pre></body></html>")
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["From"] = f"{BRAND} <{sender}>"
+        msg["To"] = ", ".join(recipients)
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html, "html", "utf-8"))
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=60) as srv:
+            srv.starttls()
+            srv.login(sender, app_password)
+            srv.sendmail(sender, recipients, msg.as_string())
+        print(f"  Alerte technique envoyee a : {recipients}")
+    except Exception as e:
+        print(f"  Alerte technique non envoyee : {e}")
+
+
+# ==========================================================================
+# JOURNAL DES SIGNAUX
+# ==========================================================================
+
+LOG_FIELDS = ["horodatage_envoi", "date_signal", "motif_signal", "action",
+              "spy_pct", "qqq_pct", "cash_pct", "prix_spy", "prix_qqq",
+              "source_donnees", "destinataires", "statut"]
+
+
+def already_sent_today(date_signal: pd.Timestamp) -> bool:
+    """Verifie dans le journal qu'aucun email n'est deja parti pour cette seance."""
+    if not SIGNALS_LOG.exists():
+        return False
+    try:
+        df = pd.read_csv(SIGNALS_LOG)
+        if "date_signal" not in df.columns or df.empty:
+            return False
+        deja = df.loc[df["statut"] == "ENVOYE", "date_signal"].astype(str).tolist()
+        return str(pd.Timestamp(date_signal).date()) in deja
+    except Exception as e:
+        print(f"  Journal illisible ({e}), on continue sans blocage.")
+        return False
+
+
+def append_log(ctx, motif, source, recipients, statut):
+    is_new = not SIGNALS_LOG.exists()
+    row = {
+        "horodatage_envoi": datetime.now(NY).strftime("%Y-%m-%d %H:%M:%S"),
+        "date_signal": str(pd.Timestamp(ctx["signal_date"]).date()),
+        "motif_signal": motif,
+        "action": ctx["action"],
+        "spy_pct": ctx["spy_pct"],
+        "qqq_pct": ctx["qqq_pct"],
+        "cash_pct": ctx["cash_pct"],
+        "prix_spy": round(ctx["spy_close"], 4),
+        "prix_qqq": round(ctx["qqq_close"], 4),
+        "source_donnees": source,
+        "destinataires": len(recipients),
+        "statut": statut,
+    }
+    with open(SIGNALS_LOG, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=LOG_FIELDS)
+        if is_new:
+            w.writeheader()
+        w.writerow(row)
+    print(f"  Journal mis a jour : {SIGNALS_LOG}")
+
+
+# ==========================================================================
+# PROGRAMME PRINCIPAL
+# ==========================================================================
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--force", action="store_true",
+                    help="Envoyer meme si ce n'est pas un jour de signal")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Tout calculer sans envoyer ni journaliser")
+    args = ap.parse_args()
+
     sender = os.environ.get("GMAIL_USER")
     app_password = os.environ.get("GMAIL_APP_PASS")
     recipients = [r.strip() for r in os.environ.get("ALERT_RECIPIENTS", "").split(",") if r.strip()]
+
     if not sender or not app_password or not recipients:
-        print("ERREUR: GMAIL_USER / GMAIL_APP_PASS / ALERT_RECIPIENTS manquant"); sys.exit(1)
+        print("ERREUR : GMAIL_USER / GMAIL_APP_PASS / ALERT_RECIPIENTS manquant")
+        sys.exit(1)
+
+    # --- 1. Donnees --------------------------------------------------------
     try:
-        print("Fetch EODHD..."); close, open_adj = build_frames()
-        print(f"Derniere donnee : {close.index[-1].date()}")
+        print("Recuperation des donnees ...")
+        close, open_adj, source = build_frames()
+        print(f"  Source retenue : {source}")
+        print(f"  Derniere seance recue : {close.index[-1].date()}")
+    except Exception as e:
+        msg = (f"Aucune source de donnees disponible.\n\n"
+               f"{type(e).__name__} : {e}\n\n{traceback.format_exc()}")
+        print(f"ERREUR : {msg}")
+        send_tech_alert(msg, sender, app_password)
+        sys.exit(1)
+
+    # --- 2. Fraicheur ------------------------------------------------------
+    fresh, fresh_msg = check_freshness(close)
+    print(f"  {fresh_msg}")
+    if not fresh and not args.force:
+        send_tech_alert(
+            f"Envoi annule : donnees non fraiches.\n\n{fresh_msg}\n\n"
+            f"Source interrogee : {source}\n"
+            f"Aucun email n'a ete envoye aux destinataires.",
+            sender, app_password)
+        sys.exit(1)
+
+    # --- 3. Calcul de l'etat -----------------------------------------------
+    try:
         ctx = compute_state(close, open_adj)
-        print(f"ACTION = {ctx['action']} | {ctx['directive']}")
+        position = compute_position_details(ctx["_eng"], close)
+        signal_day, motif = is_signal_day(close)
+        print(f"  Jour de signal : {signal_day} ({motif})")
+        print(f"  Etat : {'INVESTI' if position['investi'] else 'LIQUIDITES'}"
+              f" | gain latent {position['gain_latent']:+.2f} {DEVISE}"
+              f" ({position['gain_latent_pct']:+.2f} %)")
+    except Exception as e:
+        msg = f"Calcul impossible.\n\n{type(e).__name__} : {e}\n\n{traceback.format_exc()}"
+        print(f"ERREUR : {msg}")
+        send_tech_alert(msg, sender, app_password)
+        sys.exit(1)
+
+    # --- 4. Ecriture de l'etat public (tous les jours ouvres) ---------------
+    if args.dry_run:
+        print("Mode test : etat non ecrit, aucun envoi.")
+        print(f"  Action du jour : {ctx['action']} | {ctx['directive']}")
+        return
+
+    ecrire_etat_public(ctx, position, signal_day, motif, source)
+
+    # --- 5. Envoi de l'email : uniquement les jours de signal ---------------
+    if not signal_day and not args.force:
+        print("Etat mis a jour. Aucun email : ce n'est pas un jour de signal.")
+        return
+
+    date_signal = close.index[-1]
+    if already_sent_today(date_signal) and not args.force:
+        print(f"Etat mis a jour. Aucun email : deja envoye pour la seance du {date_signal.date()}.")
+        return
+
+    try:
+        print(f"  ACTION = {ctx['action']} | {ctx['directive']}")
         html = build_html_email(ctx)
         send_email(subject_for(ctx), html, sender, app_password, recipients)
-        print("OK")
+        append_log(ctx, motif, source, recipients, "ENVOYE")
+        print("Termine.")
     except Exception as e:
-        print(f"ERREUR: {type(e).__name__}: {e}\n{traceback.format_exc()}"); sys.exit(1)
+        msg = f"{type(e).__name__} : {e}\n\n{traceback.format_exc()}"
+        print(f"ERREUR : {msg}")
+        try:
+            append_log(ctx, motif, source, recipients, "ECHEC")
+        except Exception:
+            pass
+        send_tech_alert(msg, sender, app_password)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
