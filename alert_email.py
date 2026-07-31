@@ -70,12 +70,14 @@ for _p in (_HERE, os.path.join(_HERE, "src"), os.path.join(_HERE, ".."),
 try:
     from src.strategy import (
         ASSETS_HELD, COST_BPS, CASH_YIELD_DAILY, LIVE_START_DATE,
+        COST_FINANCING_ANNUAL,
         compute_monthly_score, compute_target_allocation,
         get_filter_days, evaluate_filter, get_current_signal,
     )
 except ImportError:
     from strategy import (
         ASSETS_HELD, COST_BPS, CASH_YIELD_DAILY, LIVE_START_DATE,
+        COST_FINANCING_ANNUAL,
         compute_monthly_score, compute_target_allocation,
         get_filter_days, evaluate_filter, get_current_signal,
     )
@@ -101,6 +103,10 @@ ETAT_JSON = ROOT / "etat_strategie.json"
 # conversion de devise qui melangerait performance et taux de change.
 CAPITAL_REFERENCE_USD = 10_000
 DEVISE = "USD"
+
+# Taux de financement annuel applique a la courbe levier 1,5 de l'email.
+# Decision Arnaud du 31/07/2026 : 2,5 %/an (au lieu des 3 % du backtest).
+FINANCEMENT_LEVIER_EMAIL = 0.025
 
 SMTP_RETRY_DELAYS = [30, 60, 120]
 NY = ZoneInfo("America/New_York")
@@ -346,6 +352,7 @@ def run_modeC(prices, prices_open, leverage=1.0, initial_capital=10_000_000):
     prev_target = None
     filter_days = get_filter_days(prices_bt.index)
     forced_cash = False
+    margin_breaches = 0
 
     for date in prices_bt.index:
         p = prices_bt.loc[date]
@@ -372,6 +379,13 @@ def run_modeC(prices, prices_open, leverage=1.0, initial_capital=10_000_000):
 
         if cash > 0:
             cash *= 1 + CASH_YIELD_DAILY
+        elif cash < 0 and leverage > 1.0:
+            # Interets quotidiens sur le cash emprunte (levier)
+            cash -= (-cash) * FINANCEMENT_LEVIER_EMAIL / 252
+            # Surveillance marge Reg-T (25% de la valeur des positions)
+            pv_chk = sum(positions[a] * p[a] for a in ASSETS_HELD)
+            if pv_chk > 0 and (cash + pv_chk) < 0.25 * pv_chk:
+                margin_breaches += 1
 
         if date in rebal_set:
             target = alloc_bt.loc[date].to_dict()
@@ -409,7 +423,7 @@ def run_modeC(prices, prices_open, leverage=1.0, initial_capital=10_000_000):
     last_trade = trades[-1] if trades else None
     return {"positions": positions, "pending": pending, "trades": trades,
             "last_trade": last_trade, "last_date": prices_bt.index[-1],
-            "equity": equity}
+            "equity": equity, "margin_breaches": margin_breaches}
 
 
 # ==========================================================================
@@ -665,12 +679,20 @@ def ecrire_etat_public(ctx, position, jour_de_signal, motif, source):
 # COURBE DE PERFORMANCE — image integree a l'email
 # ==========================================================================
 
-def build_equity_png(equity: pd.Series) -> bytes:
+def max_drawdown_pct(equity: pd.Series) -> float:
+    """Pire baisse depuis un sommet, en pourcentage negatif."""
+    eq = equity.dropna()
+    dd = eq / eq.cummax() - 1
+    return float(dd.min() * 100)
+
+
+def build_equity_png(equity: pd.Series, equity_lev: pd.Series | None = None) -> bytes:
     """Trace la courbe de la strategie, normalisee au capital de reference.
 
-    Conformement a la regle interne : trait vertical a la date de demarrage
-    live, mention explicite que tout ce qui precede est une performance
-    simulee (backtest). Tout est en dollars, levier 1.
+    Courbe principale : levier 1 (coherente avec le tableau d'allocation).
+    Courbe d'arriere-plan facultative : levier 1,5, en gris leger, frais de
+    financement inclus. Trait vertical au demarrage live, partie anterieure
+    explicitement marquee comme simulee. Tout est en dollars.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -683,11 +705,17 @@ def build_equity_png(equity: pd.Series) -> bytes:
 
     fig, ax = plt.subplots(figsize=(8.4, 3.6), dpi=150)
 
+    if equity_lev is not None and len(equity_lev.dropna()):
+        lev = equity_lev.dropna()
+        lev = lev / lev.iloc[0] * CAPITAL_REFERENCE_USD
+        ax.plot(lev.index, lev.values, color="#cbd5e1", linewidth=1.0,
+                label="Levier 1,5 (simulation, financement 2,5 %/an)", zorder=1)
+
     avant = eq.loc[eq.index < live]
     apres = eq.loc[eq.index >= live]
     if len(avant):
         ax.plot(avant.index, avant.values, color="#64748b", linewidth=1.3,
-                label="Performance simulee (backtest)")
+                label="Levier 1 — performance simulee (backtest)", zorder=2)
     if len(apres):
         # raccord visuel entre les deux segments
         if len(avant):
@@ -696,7 +724,7 @@ def build_equity_png(equity: pd.Series) -> bytes:
         else:
             join_x, join_y = apres.index, apres.values
         ax.plot(join_x, join_y, color="#0f766e", linewidth=1.6,
-                label="Signaux live")
+                label="Levier 1 — signaux live", zorder=3)
 
     if eq.index.min() <= live <= eq.index.max():
         ax.axvline(live, color="#b91c1c", linewidth=1.0, linestyle="--")
@@ -749,7 +777,7 @@ def _alloc_rows(spy_pct, qqq_pct, cash_pct, capital):
     return "".join(out)
 
 
-def build_html_email(ctx):
+def build_html_email(ctx, maxdd_1="n.d.", maxdd_15="n.d."):
     s = ACTION_STYLES[ctx["action"]]
     cap = ctx.get("capital_exemple", 10000)
     spy, qqq, cash = ctx["spy_pct"], ctx["qqq_pct"], ctx["cash_pct"]
@@ -791,7 +819,9 @@ def build_html_email(ctx):
   <tr><td style="padding:18px 28px 4px;">
     <p style="margin:0 0 10px;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Performance de la strategie</p>
     <img src="cid:equity_curve" alt="Courbe de performance" width="544" style="width:100%;max-width:544px;border:1px solid #e2e8f0;border-radius:10px;display:block;">
-    <p style="margin:8px 0 0;color:#94a3b8;font-size:11px;line-height:1.5;">Base {cap:,.0f} $ US, levier 1, frais inclus. La partie grise est une <b>performance simulee</b> (backtest) ; la partie verte correspond aux signaux emis depuis le demarrage live. Les performances passees ne prejugent pas des performances futures.</p>
+    <p style="margin:8px 0 0;color:#94a3b8;font-size:11px;line-height:1.5;"><b>Courbe principale : levier 1</b>, coherente avec l'allocation ci-dessus. La courbe gris clair montre la meme strategie a levier 1,5 (simulation, cout de financement de 2,5 %/an inclus). La partie anterieure au trait rouge est une <b>performance simulee</b> (backtest) ; la partie verte correspond aux signaux emis depuis le demarrage live. Base {cap:,.0f} $ US, frais inclus.</p>
+    <p style="margin:6px 0 0;color:#64748b;font-size:12px;font-weight:600;">Pire baisse historique (drawdown maximum) : {maxdd_1} (levier 1) &middot; {maxdd_15} (levier 1,5)</p>
+    <p style="margin:6px 0 0;color:#94a3b8;font-size:10px;line-height:1.5;">Les performances passees ne prejugent pas des performances futures.</p>
   </td></tr>
   <tr><td style="padding:20px 28px 26px;border-top:1px solid #e2e8f0;">
     <p style="margin:0 0 8px;color:#94a3b8;font-size:11px;line-height:1.5;">Signal genere automatiquement le {ctx['date']}. Strategie {STRAT_NAME} ({BRAND}). Les ordres sont a executer a l'ouverture de la prochaine seance.</p>
@@ -998,8 +1028,14 @@ def main():
 
     try:
         print(f"  ACTION = {ctx['action']} | {ctx['directive']}")
-        html = build_html_email(ctx)
-        png = build_equity_png(ctx["_eng"]["equity"])
+        eng15 = run_modeC(close, open_adj, leverage=1.5)
+        if eng15.get("margin_breaches", 0) > 0:
+            print(f"  ATTENTION : {eng15['margin_breaches']} jour(s) sous le seuil "
+                  f"de marge Reg-T 25% sur la simulation levier 1,5.")
+        maxdd_1 = f"{max_drawdown_pct(ctx['_eng']['equity']):.1f} %".replace(".", ",")
+        maxdd_15 = f"{max_drawdown_pct(eng15['equity']):.1f} %".replace(".", ",")
+        html = build_html_email(ctx, maxdd_1=maxdd_1, maxdd_15=maxdd_15)
+        png = build_equity_png(ctx["_eng"]["equity"], equity_lev=eng15["equity"])
         send_email(subject_for(ctx), html, sender, app_password, recipients,
                    inline_png=png)
         # Un envoi declenche a la main un jour ordinaire est marque comme test,
