@@ -43,7 +43,7 @@ jobs:
           python-version: '3.11'
 
       - name: Installation des bibliotheques
-        run: pip install pandas numpy requests yfinance
+        run: pip install pandas numpy requests yfinance matplotlib
 
       - name: Calcul de l'etat et envoi eventuel du signal
         env:
