@@ -21,6 +21,10 @@ on:
         description: 'Mode test : calculer sans rien ecrire ni envoyer'
         required: false
         default: 'false'
+      preview:
+        description: "Apercu de mise en page : OUVRIR, FERMER ou MAINTENIR (vide = fonctionnement normal)"
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -59,6 +63,9 @@ jobs:
           fi
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
+          fi
+          if [ -n "${{ github.event.inputs.preview }}" ]; then
+            ARGS="$ARGS --preview ${{ github.event.inputs.preview }}"
           fi
           python3 alert_email.py $ARGS
 
