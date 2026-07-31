@@ -1,0 +1,34 @@
+{
+  "strategie": "US Index Momentum",
+  "marque": "Quant Signals",
+  "devise": "USD",
+  "capital_de_reference": 10000,
+  "levier": 1,
+  "calcule_le": "2026-07-31 11:18:38",
+  "seance_de_reference": "2026-07-30",
+  "source_donnees": "EODHD",
+  "jour_de_signal": false,
+  "action": {
+    "action_requise": false,
+    "type": "AUCUNE",
+    "consigne": "Aucune action a realiser aujourd'hui. Ce n'est pas un jour de signal.",
+    "allocation_cible": null,
+    "motif_du_jour": "jour ordinaire"
+  },
+  "position": {
+    "investi": false,
+    "depuis": "2026-07-09",
+    "lignes": [],
+    "capital_reference": 10000,
+    "valeur_actuelle": 10000,
+    "liquidites": 10000,
+    "gain_latent": 0.0,
+    "gain_latent_pct": 0.0
+  },
+  "calendrier": {
+    "prochain_point_hebdomadaire": "2026-08-05",
+    "prochain_rebalancement_mensuel": "2026-07-31",
+    "prochaine_date_de_signal": "2026-07-31"
+  },
+  "avertissement": "Information fournie a titre d'aide a la decision. Ne constitue pas un conseil en investissement personnalise."
+}
