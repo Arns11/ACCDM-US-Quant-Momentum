@@ -791,10 +791,17 @@ def apply_preview(ctx, scenario: str):
 # ==========================================================================
 
 ACTION_STYLES = {
-    "OUVRIR":    {"color": "#15803d", "bg": "#dcfce7", "icon": "&#9650;"},
-    "FERMER":    {"color": "#b91c1c", "bg": "#fee2e2", "icon": "&#9660;"},
-    "MAINTENIR": {"color": "#475569", "bg": "#f1f5f9", "icon": "&#61;"},
+    "OUVRIR":    {"bg": "#15803d", "titre": "ENTRER EN POSITION — ACHETER",
+                  "icon": "&#9650;"},
+    "FERMER":    {"bg": "#b91c1c", "titre": "SORTIR DU MARCHE — VENDRE",
+                  "icon": "&#9660;"},
+    "MAINTENIR": {"bg": "#475569", "titre": "AUCUNE ACTION A REALISER",
+                  "icon": "&#61;"},
 }
+
+
+def _fmt_usd(x):
+    return f"{x:,.0f}".replace(",", " ")
 
 
 def _alloc_rows(spy_pct, qqq_pct, cash_pct, capital):
@@ -807,74 +814,116 @@ def _alloc_rows(spy_pct, qqq_pct, cash_pct, capital):
         bg = "#ffffff" if i % 2 == 0 else "#f8fafc"
         out.append(f"""
         <tr style="background:{bg};">
-          <td style="padding:12px 16px;border-bottom:1px solid #e2e8f0;font-weight:700;color:{col};font-size:15px;">{tk}
-            <span style="display:block;font-weight:400;color:#94a3b8;font-size:12px;margin-top:2px;">{name}</span></td>
-          <td style="padding:12px 16px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;color:{col};font-size:18px;">{pct:.0f}%</td>
-          <td style="padding:12px 16px;border-bottom:1px solid #e2e8f0;text-align:right;color:#475569;font-size:15px;">{montant:,.0f} $</td>
-        </tr>""".replace(",", " "))
+          <td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;font-weight:700;color:{col};font-size:16px;">{tk}
+            <span style="display:block;font-weight:400;color:#94a3b8;font-size:13px;margin-top:2px;">{name}</span></td>
+          <td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;color:{col};font-size:19px;">{pct:.0f}%</td>
+          <td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;text-align:right;color:#475569;font-size:16px;">{_fmt_usd(montant)} $</td>
+        </tr>""")
     return "".join(out)
 
 
 def build_html_email(ctx, maxdd_1="n.d.", maxdd_15="n.d."):
-    s = ACTION_STYLES[ctx["action"]]
+    st = ACTION_STYLES[ctx["action"]]
     cap = ctx.get("capital_exemple", 10000)
+    cap_txt = _fmt_usd(cap)
     spy, qqq, cash = ctx["spy_pct"], ctx["qqq_pct"], ctx["cash_pct"]
-    last = (f"""<p style="margin:4px 0 0;color:#94a3b8;font-size:13px;">Derniere action : {ctx['last_action']}</p>"""
-            if ctx.get("last_action") else "")
-    sub_lev = ""
+
+    # Historique d'actions : si l'email annonce une nouvelle action, celle
+    # affichee ci-dessous devient l'action PRECEDENTE, pas la derniere.
+    hist = ""
+    if ctx.get("last_action"):
+        libelle = ("Action precedente" if ctx["action"] in ("OUVRIR", "FERMER")
+                   else "Derniere action")
+        hist = (f'<p style="margin:6px 0 0;color:#94a3b8;font-size:14px;">'
+                f'{libelle} : {ctx["last_action"]}</p>')
+
+    note_levier = ""
     if cash < 99.9:
-        sub_lev = ('<table role="presentation" width="100%" style="margin-top:10px;background:#fffbeb;'
-                   'border:1px solid #fde68a;border-radius:8px;"><tr><td style="padding:10px 14px;color:#92400e;font-size:12px;line-height:1.5;">'
-                   "<b>Levier :</b> allocation indiquee pour un levier de 1 (sans effet de levier). "
-                   "Si vous utilisez un levier, multipliez chaque ligne par votre coefficient (ex. levier x1,5 : 50% deviennent 75%)."
-                   "</td></tr></table>")
+        note_levier = (
+            '<table role="presentation" width="100%" style="margin-top:12px;'
+            'background:#f8fafc;border-left:4px solid #475569;border-radius:6px;">'
+            '<tr><td style="padding:12px 16px;color:#334155;font-size:14px;line-height:1.6;">'
+            "<b>Si vous utilisez un levier :</b> les pourcentages ci-dessus sont donnes "
+            "sans levier. Multipliez chaque ligne par votre coefficient "
+            "(exemple : avec un levier de 1,5, les 50% deviennent 75%)."
+            "</td></tr></table>")
+
+    note_tickers = ""
+    if cash < 99.9:
+        note_tickers = (
+            '<table role="presentation" width="100%" style="margin-top:10px;'
+            'background:#f8fafc;border-left:4px solid #0369a1;border-radius:6px;">'
+            '<tr><td style="padding:12px 16px;color:#334155;font-size:14px;line-height:1.6;">'
+            "<b>SPY ou QQQ indisponibles chez votre courtier ?</b> Les residents "
+            "europeens peuvent utiliser les equivalents cotes a Londres en dollars : "
+            "<b>CSPX</b> remplace SPY (S&amp;P 500) et <b>CNDX</b> remplace QQQ "
+            "(Nasdaq 100). Memes indices, memes proportions."
+            "</td></tr></table>")
+
     alloc = _alloc_rows(spy, qqq, cash, cap)
 
     return f"""<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#eef2f6;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f6;padding:24px 12px;"><tr><td align="center">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,.08);">
-  <tr><td style="background:#0f172a;padding:22px 28px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f6;padding:24px 10px;"><tr><td align="center">
+<table role="presentation" width="680" cellpadding="0" cellspacing="0" style="max-width:680px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,.08);">
+
+  <tr><td style="background:#0f172a;padding:22px 30px;">
     <table role="presentation" width="100%"><tr>
-      <td style="color:#ffffff;font-size:18px;font-weight:800;letter-spacing:2px;">{BRAND.upper()}</td>
-      <td align="right" style="color:#7dd3fc;font-size:12px;font-weight:600;">{STRAT_NAME}</td>
+      <td style="color:#ffffff;font-size:20px;font-weight:800;">{STRAT_NAME}</td>
+      <td align="right" style="color:#7dd3fc;font-size:13px;font-weight:600;letter-spacing:1.5px;">{BRAND.upper()}</td>
     </tr></table></td></tr>
-  <tr><td style="padding:28px 28px 8px;">
-    <span style="display:inline-block;background:{s['bg']};color:{s['color']};font-size:13px;font-weight:800;letter-spacing:1px;padding:7px 14px;border-radius:999px;">{s['icon']}&nbsp;&nbsp;{ctx['action']}</span>
-    <h1 style="margin:16px 0 6px;font-size:24px;line-height:1.25;color:#0f172a;font-weight:800;">{ctx['directive']}</h1>
-    <p style="margin:0;color:#64748b;font-size:14px;">Signal du {ctx['date']}</p>
-    {last}</td></tr>
-  <tr><td style="padding:18px 28px 4px;">
-    <p style="margin:0 0 10px;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Votre allocation cible</p>
+
+  <tr><td style="background:{st['bg']};padding:26px 30px;text-align:center;">
+    <p style="margin:0;color:#ffffff;font-size:15px;font-weight:600;letter-spacing:2px;opacity:.85;">SIGNAL DU {ctx['date']}</p>
+    <p style="margin:10px 0 0;color:#ffffff;font-size:30px;font-weight:800;line-height:1.2;">{st['icon']}&nbsp; {st['titre']}</p>
+    <p style="margin:10px 0 0;color:#ffffff;font-size:17px;opacity:.95;">{ctx['directive']}</p>
+  </td></tr>
+
+  <tr><td style="padding:22px 30px 6px;">
+    <table role="presentation" width="100%" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;">
+      <tr><td style="padding:14px 18px;color:#1e3a5f;font-size:15px;line-height:1.7;">
+        <b>Quand agir ?</b> Ce signal a ete calcule apres la cloture de Wall Street du {ctx['date']}.
+        Si une action est demandee ci-dessus, passez votre ordre <b>a la prochaine ouverture de la
+        Bourse americaine</b> (15h30 heure de Paris), avec un ordre "au marche". S'il n'y a rien a
+        faire, vous n'avez aucun ordre a passer.
+      </td></tr></table>
+    {hist}</td></tr>
+
+  <tr><td style="padding:18px 30px 4px;">
+    <p style="margin:0 0 10px;color:#0f172a;font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Votre allocation cible</p>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
       <tr style="background:#0f172a;">
-        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;letter-spacing:.5px;">ACTIF</td>
-        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;">% CAPITAL</td>
-        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;">POUR {cap:,.0f} $ US</td>
+        <td style="padding:11px 18px;color:#cbd5e1;font-size:12px;font-weight:700;letter-spacing:.5px;">ACTIF</td>
+        <td style="padding:11px 18px;color:#cbd5e1;font-size:12px;font-weight:700;text-align:right;">% CAPITAL</td>
+        <td style="padding:11px 18px;color:#cbd5e1;font-size:12px;font-weight:700;text-align:right;white-space:nowrap;">POUR {cap_txt} $ US</td>
       </tr>{alloc}
-    </table>{sub_lev}</td></tr>
-  <tr><td style="padding:18px 28px 4px;">
-    <p style="margin:0 0 10px;color:#0f172a;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Performance de la strategie</p>
-    <img src="cid:equity_curve" alt="Courbe de performance" width="544" style="width:100%;max-width:544px;border:1px solid #e2e8f0;border-radius:10px;display:block;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-      <tr style="background:#0f172a;">
-        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;letter-spacing:.5px;">RISQUE HISTORIQUE</td>
-        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;white-space:nowrap;">LEVIER 1</td>
-        <td style="padding:10px 16px;color:#cbd5e1;font-size:11px;font-weight:700;text-align:right;white-space:nowrap;">LEVIER 1,5</td>
+    </table>
+    {note_levier}
+    {note_tickers}</td></tr>
+
+  <tr><td style="padding:20px 30px 4px;">
+    <p style="margin:0 0 10px;color:#0f172a;font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Performance de la strategie</p>
+    <img src="cid:equity_curve" alt="Courbe de performance" width="620" style="width:100%;max-width:620px;border:1px solid #e2e8f0;border-radius:10px;display:block;">
+    <p style="margin:8px 0 0;color:#64748b;font-size:13px;line-height:1.6;">Courbe principale : <b>levier 1</b>, comme l'allocation ci-dessus. Gris clair : levier 1,5 (cout d'emprunt de 2,5 %/an deduit). Avant le trait rouge : <b>performance simulee</b> (backtest). Apres : signaux reellement emis. Base {cap_txt} $ US, frais inclus.</p>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+      <tr style="background:#f8fafc;">
+        <td style="padding:9px 18px;color:#64748b;font-size:12px;font-weight:700;letter-spacing:.5px;">RISQUE HISTORIQUE</td>
+        <td style="padding:9px 18px;color:#64748b;font-size:12px;font-weight:700;text-align:right;white-space:nowrap;">LEVIER 1</td>
+        <td style="padding:9px 18px;color:#64748b;font-size:12px;font-weight:700;text-align:right;white-space:nowrap;">LEVIER 1,5</td>
       </tr>
       <tr style="background:#ffffff;">
-        <td style="padding:12px 16px;font-size:13px;color:#0f172a;font-weight:700;">Pire baisse depuis un sommet</td>
-        <td style="padding:12px 16px;text-align:right;font-weight:700;color:#0f172a;font-size:13px;white-space:nowrap;">{maxdd_1}</td>
-        <td style="padding:12px 16px;text-align:right;font-weight:700;color:#0f172a;font-size:13px;white-space:nowrap;">{maxdd_15}</td>
+        <td style="padding:11px 18px;font-size:14px;color:#334155;">Pire baisse depuis un sommet</td>
+        <td style="padding:11px 18px;text-align:right;font-weight:700;color:#0f172a;font-size:14px;white-space:nowrap;">{maxdd_1}</td>
+        <td style="padding:11px 18px;text-align:right;font-weight:700;color:#0f172a;font-size:14px;white-space:nowrap;">{maxdd_15}</td>
       </tr>
     </table>
-    <p style="margin:6px 0 0;color:#94a3b8;font-size:11px;line-height:1.5;">La pire baisse (drawdown maximum) est la plus forte perte temporaire que la strategie a connue avant de retrouver son niveau precedent.</p>
-    <p style="margin:10px 0 0;color:#64748b;font-size:12px;line-height:1.6;"><b>Comment lire le graphique :</b> la courbe principale suit un capital de {cap:,.0f} $ US <b>sans effet de levier</b>, comme le tableau d'allocation ci-dessus. La courbe gris clair montre la meme strategie avec un levier de 1,5, c'est-a-dire en investissant une fois et demie le capital grace a un emprunt (cout de l'emprunt de 2,5 % par an deja deduit). Avant le trait rouge, il s'agit d'une <b>performance simulee</b> : ce que la strategie aurait fait dans le passe. Apres le trait rouge, la courbe suit les signaux reellement envoyes. Tous les frais de transaction sont inclus. Les performances passees ne prejugent pas des performances futures.</p>
+    <p style="margin:6px 0 0;color:#94a3b8;font-size:12px;line-height:1.5;">La pire baisse (drawdown maximum) est la plus forte perte temporaire connue avant de retrouver le niveau precedent. Les performances passees ne prejugent pas des performances futures.</p>
   </td></tr>
-  <tr><td style="padding:20px 28px 26px;border-top:1px solid #e2e8f0;">
-    <p style="margin:0 0 10px;color:#334155;font-size:13px;line-height:1.7;"><b>Quand agir ?</b> Ce signal a ete calcule apres la cloture de la Bourse americaine du {ctx['date']}. Si une action est demandee ci-dessus, passez votre ordre <b>a l'ouverture de la prochaine seance de Wall Street</b> (15h30 heure de Paris), en choisissant un ordre "au marche". Si l'email indique qu'il n'y a rien a faire, vous n'avez aucun ordre a passer.</p>
-    <p style="margin:0;color:#cbd5e1;font-size:10px;line-height:1.5;">Information fournie a titre d'aide a la decision &mdash; ne constitue pas un conseil en investissement personnalise. Les performances passees ne prejugent pas des performances futures. Vous restez responsable de vos ordres. &middot; <a href="#" style="color:#94a3b8;">Se desabonner</a></p>
+
+  <tr><td style="padding:18px 30px 26px;border-top:1px solid #e2e8f0;">
+    <p style="margin:0;color:#94a3b8;font-size:11px;line-height:1.6;">Signal genere automatiquement. Strategie {STRAT_NAME} ({BRAND}). Information fournie a titre d'aide a la decision &mdash; ne constitue pas un conseil en investissement personnalise. Vous restez responsable de vos ordres. &middot; <a href="#" style="color:#94a3b8;">Se desabonner</a></p>
   </td></tr>
 </table></td></tr></table></body></html>"""
 
@@ -882,10 +931,10 @@ def build_html_email(ctx, maxdd_1="n.d.", maxdd_15="n.d."):
 def subject_for(ctx):
     a = ctx["action"]
     if a == "OUVRIR":
-        return f"{STRAT_NAME} - SIGNAL : ouvrir des positions ({ctx['date']})"
+        return f"ACTION REQUISE - ACHETER | {STRAT_NAME} ({ctx['date']})"
     if a == "FERMER":
-        return f"{STRAT_NAME} - SIGNAL : sortir du marche ({ctx['date']})"
-    return f"{STRAT_NAME} - Point hebdo : rien a faire ({ctx['date']})"
+        return f"ACTION REQUISE - VENDRE | {STRAT_NAME} ({ctx['date']})"
+    return f"Aucune action | {STRAT_NAME} ({ctx['date']})"
 
 
 # ==========================================================================
