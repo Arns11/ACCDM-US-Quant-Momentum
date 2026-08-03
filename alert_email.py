@@ -943,7 +943,7 @@ def build_html_email(ctx, maxdd_1="n.d.", maxdd_15="n.d."):
     {hist}</td></tr>
 
   <tr><td style="padding:18px 30px 4px;">
-    <p style="margin:0 0 10px;color:#0f172a;font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Votre allocation cible</p>
+    <p style="margin:0 0 10px;color:#0f172a;font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Votre allocation cible pour {cap_txt} $ US investis &mdash; levier 1</p>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
       <tr style="background:#0f172a;">
         <td style="padding:11px 18px;color:#cbd5e1;font-size:12px;font-weight:700;letter-spacing:.5px;">ACTIF</td>
