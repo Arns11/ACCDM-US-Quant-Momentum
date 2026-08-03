@@ -507,6 +507,10 @@ def compute_state(prices, prices_open):
         capital_exemple=CAPITAL_EXEMPLE, why=why, last_action=last_action,
         signal_date=eng["last_date"],
         spy_close=float(spy_c), qqq_close=float(qqq_c),
+        qty_ref={
+            "SPY": int(CAPITAL_REFERENCE_USD * 0.5 / float(spy_c)) if spy_pct > 0 else 0,
+            "QQQ": int(CAPITAL_REFERENCE_USD * 0.5 / float(qqq_c)) if qqq_pct > 0 else 0,
+        },
         _eng=eng,
         ctx_market=dict(
             mom_ok=(monthly == "RISKY"),
@@ -664,6 +668,8 @@ def ecrire_etat_public(ctx, position, jour_de_signal, motif, source):
         "source_donnees": source,
         "jour_de_signal": bool(jour_de_signal),
         "action": action,
+        "quantites_reference": ctx.get("qty_ref"),
+        "cours_cloture_signal": {"SPY": ctx.get("spy_close"), "QQQ": ctx.get("qqq_close")},
         "position": position,
         "calendrier": prochaines_dates_signal(date_signal),
         "avertissement": "Information fournie a titre d'aide a la decision. "
@@ -804,20 +810,47 @@ def _fmt_usd(x):
     return f"{x:,.0f}".replace(",", " ")
 
 
-def _alloc_rows(spy_pct, qqq_pct, cash_pct, capital):
+def _alloc_rows(spy_pct, qqq_pct, cash_pct, capital, qty_ref=None, prix=None):
+    """Lignes du tableau d'allocation.
+
+    Si les quantites de reference sont fournies, une colonne supplementaire
+    affiche le nombre de parts a acheter pour le capital de reference, et le
+    montant affiche devient le montant REELLEMENT investi avec ces parts
+    entieres (quantite x cours), pas le montant theorique du pourcentage.
+    """
+    qty_ref = qty_ref or {}
+    prix = prix or {}
     out = []
     data = [("SPY", "S&P 500", spy_pct, "#0f172a"),
             ("QQQ", "Nasdaq 100", qqq_pct, "#0f172a"),
             ("Liquidites", "Cash", cash_pct, "#64748b")]
+
+    investis = {}
+    for tk in ("SPY", "QQQ"):
+        if qty_ref.get(tk) and prix.get(tk):
+            investis[tk] = qty_ref[tk] * prix[tk]
+
     for i, (tk, name, pct, col) in enumerate(data):
-        montant = capital * pct / 100
         bg = "#ffffff" if i % 2 == 0 else "#f8fafc"
+        if tk == "Liquidites":
+            if investis:
+                montant = capital - sum(investis.values())
+            else:
+                montant = capital * pct / 100
+            qty_cell = "&mdash;"
+        elif tk in investis:
+            montant = investis[tk]
+            qty_cell = f"{qty_ref[tk]} part{'s' if qty_ref[tk] > 1 else ''}"
+        else:
+            montant = capital * pct / 100
+            qty_cell = "&mdash;" if pct == 0 else ""
         out.append(f"""
         <tr style="background:{bg};">
           <td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;font-weight:700;color:{col};font-size:16px;">{tk}
             <span style="display:block;font-weight:400;color:#94a3b8;font-size:13px;margin-top:2px;">{name}</span></td>
           <td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;color:{col};font-size:19px;">{pct:.0f}%</td>
-          <td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;text-align:right;color:#475569;font-size:16px;">{_fmt_usd(montant)} $</td>
+          <td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;color:{col};font-size:16px;white-space:nowrap;">{qty_cell}</td>
+          <td style="padding:14px 18px;border-bottom:1px solid #e2e8f0;text-align:right;color:#475569;font-size:16px;white-space:nowrap;">{_fmt_usd(montant)} $</td>
         </tr>""")
     return "".join(out)
 
@@ -860,7 +893,26 @@ def build_html_email(ctx, maxdd_1="n.d.", maxdd_15="n.d."):
             "(Nasdaq 100). Memes indices, memes proportions."
             "</td></tr></table>")
 
-    alloc = _alloc_rows(spy, qqq, cash, cap)
+    qty_ref = ctx.get("qty_ref") or {}
+    prix = {"SPY": ctx.get("spy_close"), "QQQ": ctx.get("qqq_close")}
+    alloc = _alloc_rows(spy, qqq, cash, cap, qty_ref=qty_ref, prix=prix)
+
+    note_quantites = ""
+    if any(qty_ref.get(t) for t in ("SPY", "QQQ")):
+        total_investi = sum(qty_ref[t] * prix[t] for t in ("SPY", "QQQ")
+                            if qty_ref.get(t) and prix.get(t))
+        reliquat = cap - total_investi
+        note_quantites = (
+            '<table role="presentation" width="100%" style="margin-top:10px;'
+            'background:#f8fafc;border-left:4px solid #64748b;border-radius:6px;">'
+            '<tr><td style="padding:12px 16px;color:#334155;font-size:14px;line-height:1.6;">'
+            f"<b>Pourquoi ces quantites ?</b> Une part d'ETF ne se decoupe pas : on achete "
+            f"un nombre entier de parts. Avec {cap_txt} $, ces quantites representent "
+            f"{_fmt_usd(total_investi)} $ reellement investis ; les {_fmt_usd(reliquat)} $ "
+            f"restants demeurent en liquidites. C'est pour cela que les montants ne tombent "
+            f"pas juste sur les pourcentages. Pour un autre capital, ajustez les quantites "
+            f"en proportion (capital double = quantites doublees)."
+            "</td></tr></table>")
 
     return f"""<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -896,9 +948,11 @@ def build_html_email(ctx, maxdd_1="n.d.", maxdd_15="n.d."):
       <tr style="background:#0f172a;">
         <td style="padding:11px 18px;color:#cbd5e1;font-size:12px;font-weight:700;letter-spacing:.5px;">ACTIF</td>
         <td style="padding:11px 18px;color:#cbd5e1;font-size:12px;font-weight:700;text-align:right;">% CAPITAL</td>
+        <td style="padding:11px 18px;color:#cbd5e1;font-size:12px;font-weight:700;text-align:right;white-space:nowrap;">QUANTITE</td>
         <td style="padding:11px 18px;color:#cbd5e1;font-size:12px;font-weight:700;text-align:right;white-space:nowrap;">POUR {cap_txt} $ US</td>
       </tr>{alloc}
     </table>
+    {note_quantites}
     {note_levier}
     {note_tickers}</td></tr>
 
