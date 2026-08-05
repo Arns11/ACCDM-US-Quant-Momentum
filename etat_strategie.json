@@ -4,24 +4,28 @@
   "devise": "USD",
   "capital_de_reference": 10000,
   "levier": 1,
-  "calcule_le": "2026-08-04 18:50:26",
-  "seance_de_reference": "2026-08-04",
+  "calcule_le": "2026-08-05 18:46:13",
+  "seance_de_reference": "2026-08-05",
   "source_donnees": "EODHD",
-  "jour_de_signal": false,
+  "jour_de_signal": true,
   "action": {
     "action_requise": false,
-    "type": "AUCUNE",
-    "consigne": "Aucune action a realiser aujourd'hui. Ce n'est pas un jour de signal.",
-    "allocation_cible": null,
-    "motif_du_jour": "jour ordinaire"
+    "type": "MAINTENIR",
+    "consigne": "Rien a faire : vous restez investi",
+    "allocation_cible": {
+      "SPY_pct": 50,
+      "QQQ_pct": 50,
+      "liquidites_pct": 0
+    },
+    "motif_du_jour": "filtre hebdomadaire"
   },
   "quantites_reference": {
     "SPY": 6,
     "QQQ": 6
   },
   "cours_cloture_signal": {
-    "SPY": 771.33,
-    "QQQ": 723.85
+    "SPY": 769.79,
+    "QQQ": 717.3
   },
   "position": {
     "investi": true,
@@ -31,33 +35,33 @@
         "actif": "SPY",
         "quantite": 6,
         "prix_entree": 749.44,
-        "cours_actuel": 771.33,
-        "ecart_pct": 2.92,
+        "cours_actuel": 769.79,
+        "ecart_pct": 2.72,
         "montant_investi": 4496.64,
-        "valeur_actuelle": 4627.98,
-        "gain_latent": 131.34
+        "valeur_actuelle": 4618.74,
+        "gain_latent": 122.1
       },
       {
         "actif": "QQQ",
         "quantite": 7,
         "prix_entree": 688.3,
-        "cours_actuel": 723.85,
-        "ecart_pct": 5.16,
+        "cours_actuel": 717.3,
+        "ecart_pct": 4.21,
         "montant_investi": 4818.1,
-        "valeur_actuelle": 5066.95,
-        "gain_latent": 248.85
+        "valeur_actuelle": 5021.1,
+        "gain_latent": 203.0
       }
     ],
     "capital_reference": 10000,
-    "valeur_actuelle": 10380.19,
+    "valeur_actuelle": 10325.1,
     "liquidites": 685.26,
-    "gain_latent": 380.19,
-    "gain_latent_pct": 3.8
+    "gain_latent": 325.1,
+    "gain_latent_pct": 3.25
   },
   "calendrier": {
-    "prochain_point_hebdomadaire": "2026-08-05",
+    "prochain_point_hebdomadaire": "2026-08-12",
     "prochain_rebalancement_mensuel": "2026-08-31",
-    "prochaine_date_de_signal": "2026-08-05"
+    "prochaine_date_de_signal": "2026-08-12"
   },
   "avertissement": "Information fournie a titre d'aide a la decision. Ne constitue pas un conseil en investissement personnalise."
 }
