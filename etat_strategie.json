@@ -4,28 +4,24 @@
   "devise": "USD",
   "capital_de_reference": 10000,
   "levier": 1,
-  "calcule_le": "2026-08-05 18:46:13",
-  "seance_de_reference": "2026-08-05",
+  "calcule_le": "2026-08-06 21:27:23",
+  "seance_de_reference": "2026-08-06",
   "source_donnees": "EODHD",
-  "jour_de_signal": true,
+  "jour_de_signal": false,
   "action": {
     "action_requise": false,
-    "type": "MAINTENIR",
-    "consigne": "Rien a faire : vous restez investi",
-    "allocation_cible": {
-      "SPY_pct": 50,
-      "QQQ_pct": 50,
-      "liquidites_pct": 0
-    },
-    "motif_du_jour": "filtre hebdomadaire"
+    "type": "AUCUNE",
+    "consigne": "Aucune action a realiser aujourd'hui. Ce n'est pas un jour de signal.",
+    "allocation_cible": null,
+    "motif_du_jour": "jour ordinaire"
   },
   "quantites_reference": {
     "SPY": 6,
     "QQQ": 6
   },
   "cours_cloture_signal": {
-    "SPY": 769.79,
-    "QQQ": 717.3
+    "SPY": 768.56,
+    "QQQ": 714.65
   },
   "position": {
     "investi": true,
@@ -35,28 +31,28 @@
         "actif": "SPY",
         "quantite": 6,
         "prix_entree": 749.44,
-        "cours_actuel": 769.79,
-        "ecart_pct": 2.72,
+        "cours_actuel": 768.56,
+        "ecart_pct": 2.55,
         "montant_investi": 4496.64,
-        "valeur_actuelle": 4618.74,
-        "gain_latent": 122.1
+        "valeur_actuelle": 4611.36,
+        "gain_latent": 114.72
       },
       {
         "actif": "QQQ",
         "quantite": 7,
         "prix_entree": 688.3,
-        "cours_actuel": 717.3,
-        "ecart_pct": 4.21,
+        "cours_actuel": 714.65,
+        "ecart_pct": 3.83,
         "montant_investi": 4818.1,
-        "valeur_actuelle": 5021.1,
-        "gain_latent": 203.0
+        "valeur_actuelle": 5002.55,
+        "gain_latent": 184.45
       }
     ],
     "capital_reference": 10000,
-    "valeur_actuelle": 10325.1,
+    "valeur_actuelle": 10299.17,
     "liquidites": 685.26,
-    "gain_latent": 325.1,
-    "gain_latent_pct": 3.25
+    "gain_latent": 299.17,
+    "gain_latent_pct": 2.99
   },
   "calendrier": {
     "prochain_point_hebdomadaire": "2026-08-12",
