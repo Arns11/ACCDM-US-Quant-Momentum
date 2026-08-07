@@ -4,8 +4,8 @@
   "devise": "USD",
   "capital_de_reference": 10000,
   "levier": 1,
-  "calcule_le": "2026-08-06 21:27:23",
-  "seance_de_reference": "2026-08-06",
+  "calcule_le": "2026-08-07 18:22:46",
+  "seance_de_reference": "2026-08-07",
   "source_donnees": "EODHD",
   "jour_de_signal": false,
   "action": {
@@ -20,8 +20,8 @@
     "QQQ": 6
   },
   "cours_cloture_signal": {
-    "SPY": 768.56,
-    "QQQ": 714.65
+    "SPY": 773.26,
+    "QQQ": 723.03
   },
   "position": {
     "investi": true,
@@ -31,28 +31,28 @@
         "actif": "SPY",
         "quantite": 6,
         "prix_entree": 749.44,
-        "cours_actuel": 768.56,
-        "ecart_pct": 2.55,
+        "cours_actuel": 773.26,
+        "ecart_pct": 3.18,
         "montant_investi": 4496.64,
-        "valeur_actuelle": 4611.36,
-        "gain_latent": 114.72
+        "valeur_actuelle": 4639.56,
+        "gain_latent": 142.92
       },
       {
         "actif": "QQQ",
         "quantite": 7,
         "prix_entree": 688.3,
-        "cours_actuel": 714.65,
-        "ecart_pct": 3.83,
+        "cours_actuel": 723.03,
+        "ecart_pct": 5.05,
         "montant_investi": 4818.1,
-        "valeur_actuelle": 5002.55,
-        "gain_latent": 184.45
+        "valeur_actuelle": 5061.21,
+        "gain_latent": 243.11
       }
     ],
     "capital_reference": 10000,
-    "valeur_actuelle": 10299.17,
+    "valeur_actuelle": 10386.03,
     "liquidites": 685.26,
-    "gain_latent": 299.17,
-    "gain_latent_pct": 2.99
+    "gain_latent": 386.03,
+    "gain_latent_pct": 3.86
   },
   "calendrier": {
     "prochain_point_hebdomadaire": "2026-08-12",
